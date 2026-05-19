@@ -1,0 +1,13 @@
+services:
+  parse-video:
+    build: .
+    container_name: parse-video-xiu
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PARSE_VIDEO_USERNAME=${PARSE_VIDEO_USERNAME:-}
+      - PARSE_VIDEO_PASSWORD=${PARSE_VIDEO_PASSWORD:-}
+    env_file:
+      - path: .env
+        required: false
