@@ -1,120 +1,143 @@
-import json
+"""哔哩哔哩解析器 — 基于 short_videos/BilibiliParser.php 移植
+
+核心逻辑：
+1. 提取 BV 号（支持 b23.tv 短链接重定向）
+2. 调用 bilibili API: /x/web-interface/view 获取视频信息
+3. 调用 /x/player/playurl 获取播放地址，替换 CDN 域名解决防盗链
+"""
+
+import re
 from urllib.parse import urlparse
 
 import httpx
 
-from .base import BaseParser, VideoAuthor, VideoInfo
+from .base import BaseParser, ImgInfo, VideoAuthor, VideoInfo
 
 
 class BiliBili(BaseParser):
-    """
-    哔哩哔哩
-    """
-
-    # 添加Cookie可以爬取更高清的视频，记得要把下面请求里的Cookie的注释也去掉
-    # BILI_COOKIE = "_uuid=; buvid_fp=; buvid4=; SESSDATA=; bili_jct=; DedeUserID=;"
-
-    USER_AGENT = (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-    )
-
-    def get_default_headers(self) -> dict:
-        headers = {
-            "User-Agent": self.USER_AGENT,
-            "Referer": "https://www.bilibili.com/",
-        }
-        # 如需爬取更高清的视频请取消这里的注释
-        # headers["Cookie"] = self.BILI_COOKIE
-        return headers
 
     async def parse_share_url(self, share_url: str) -> VideoInfo:
-        bvid = await self._get_bvid_from_url(share_url)
-        return await self.parse_video_id(bvid)
+        try:
+            bvid = await self._extract_bvid(share_url)
+            if not bvid:
+                raise Exception("无法提取 BV 号")
+            return await self._parse_bvid(bvid)
+        except Exception:
+            return await self._fallback_parse(share_url)
 
     async def parse_video_id(self, video_id: str) -> VideoInfo:
-        # 第一步：获取视频信息
-        view_api_url = f"https://api.bilibili.com/x/web-interface/view?bvid={video_id}"
-        view_resp_data = await self._send_bili_request(view_api_url)
+        return await self._parse_bvid(video_id)
 
-        view_resp = json.loads(view_resp_data)
-        if view_resp.get("code") != 0 or not view_resp.get("data", {}).get("pages"):
-            raise ValueError(f"无法获取该视频: {view_resp.get('message', '未知错误')}")
+    async def _extract_bvid(self, url: str) -> str:
+        parsed = urlparse(url)
+        host = parsed.netloc
 
-        data = view_resp["data"]
-        first_page_cid = data["pages"][0]["cid"]
+        if host == "b23.tv":
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+                resp = await client.get(url, headers=self._headers())
+                return self._bvid_from_path(str(resp.url))
+        elif host in ("www.bilibili.com", "m.bilibili.com"):
+            return self._bvid_from_path(url)
+        return ""
 
-        # 第二步：获取播放链接
-        play_api_url = (
-            f"https://api.bilibili.com/x/player/playurl?"
-            f"otype=json&fnver=0&fnval=0&qn=80&bvid={video_id}"
-            f"&cid={first_page_cid}&platform=html5"
+    def _bvid_from_path(self, url: str) -> str:
+        m = re.search(r"/video/(BV\w+)", url)
+        return m.group(1) if m else ""
+
+    async def _parse_bvid(self, bvid: str) -> VideoInfo:
+        headers = self._headers()
+
+        view_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(view_url, headers=headers)
+            resp.raise_for_status()
+            view_data = resp.json()
+
+        if view_data.get("code") != 0:
+            raise Exception(f"bilibili API error: {view_data.get('message', '')}")
+
+        info = view_data["data"]
+        pages = info.get("pages", [])
+        cid = pages[0]["cid"] if pages else 0
+
+        play_url = (
+            f"https://api.bilibili.com/x/player/playurl"
+            f"?otype=json&fnver=0&fnval=3&player=3&qn=112"
+            f"&bvid={bvid}&cid={cid}&platform=html5&high_quality=1"
         )
-        play_resp_data = await self._send_bili_request(play_api_url)
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(play_url, headers=headers)
+            resp.raise_for_status()
+            play_data = resp.json()
 
-        play_resp = json.loads(play_resp_data)
-        if play_resp.get("code") != 0:
-            raise ValueError(
-                f"B站API返回错误: {play_resp.get('message', '未知错误')} "
-                f"(code: {play_resp.get('code')})"
-            )
-
-        # 提取视频URL
         video_url = ""
-        play_data = play_resp.get("data", {})
-        if play_data.get("durl") and len(play_data["durl"]) > 0:
-            video_url = play_data["durl"][0].get("url", "")
+        durl = play_data.get("data", {}).get("durl", [])
+        if durl:
+            raw_url = durl[0].get("url", "")
+            parts = raw_url.split(".bilivideo.com/")
+            if len(parts) > 1:
+                video_url = f"https://upos-sz-mirrorhw.bilivideo.com/{parts[1]}"
+            else:
+                video_url = raw_url
 
-        if not video_url:
-            raise ValueError("无法获取该视频播放链接")
-
-        # 构建视频信息
-        video_info = VideoInfo(
-            title=data.get("title", ""),
+        return VideoInfo(
             video_url=video_url,
-            cover_url=data.get("pic", ""),
-            images=[],  # 空的图片列表
+            cover_url=info.get("pic", ""),
+            title=info.get("title", ""),
+            author=VideoAuthor(
+                name=info.get("owner", {}).get("name", ""),
+                avatar=info.get("owner", {}).get("face", ""),
+            ),
         )
 
-        # 设置作者信息
-        owner = data.get("owner", {})
-        video_info.author = VideoAuthor(
-            uid=str(owner.get("mid", "")),
-            name=owner.get("name", ""),
-            avatar=owner.get("face", ""),
+    async def _fallback_parse(self, share_url: str) -> VideoInfo:
+        """降级: 调用 bugpk 第三方 API"""
+        api_url = f"https://api.bugpk.com/api/bilibili?url={share_url}"
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(api_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            })
+            resp.raise_for_status()
+            data = resp.json()
+
+        d = data.get("data") or data
+        if isinstance(d, str):
+            raise Exception("第三方解析返回异常")
+
+        video_url = d.get("url") or d.get("video_url") or d.get("nwm_video_url") or d.get("wm_video_url") or ""
+        cover_url = d.get("cover") or d.get("cover_url") or d.get("img") or d.get("pic") or ""
+        title = d.get("title") or d.get("desc") or d.get("name") or ""
+        music_url = d.get("music_url") or d.get("audio_url") or ""
+
+        # 处理音乐字段可能是 dict 的情况
+        if isinstance(d.get("music"), dict):
+            music_url = d["music"].get("url", "") or music_url
+
+        author = d.get("author") or {}
+        if isinstance(author, str):
+            author = {"nickname": author}
+        author_name = author.get("nickname") or author.get("name") or ""
+        author_avatar = author.get("avatar") or author.get("avatar_url") or ""
+
+        images = []
+        for img in d.get("images") or d.get("image_list") or []:
+            if isinstance(img, str):
+                images.append(ImgInfo(url=img))
+            elif isinstance(img, dict):
+                images.append(ImgInfo(url=img.get("url") or img.get("origin") or ""))
+
+        return VideoInfo(
+            video_url=video_url,
+            cover_url=cover_url,
+            title=title,
+            music_url=music_url,
+            images=images,
+            author=VideoAuthor(name=author_name, avatar=author_avatar),
         )
 
-        return video_info
-
-    async def _get_bvid_from_url(self, raw_url: str) -> str:
-        """从URL中提取BVID"""
-        try:
-            parsed_url = urlparse(raw_url)
-        except Exception:
-            raise ValueError("URL格式无效")
-
-        if "b23.tv" in parsed_url.netloc:
-            # 处理短链接
-            async with httpx.AsyncClient(follow_redirects=False) as client:
-                resp = await client.get(raw_url, headers=self.get_default_headers())
-                location = resp.headers.get("location")
-                if not location:
-                    raise ValueError("无法从b23.tv获取重定向链接")
-                return await self._get_bvid_from_url(location)
-
-        if "bilibili.com" in parsed_url.netloc:
-            path = parsed_url.path.strip("/")
-            parts = path.split("/")
-            if len(parts) >= 2 and parts[0] == "video":
-                if parts[1].startswith("BV"):
-                    return parts[1]
-
-        raise ValueError("不是有效的B站视频链接")
-
-    async def _send_bili_request(self, api_url: str) -> str:
-        """发送B站API请求"""
-        async with httpx.AsyncClient() as client:
-            response = await client.get(api_url, headers=self.get_default_headers())
-            if response.status_code != 200:
-                raise ValueError(f"HTTP请求失败, 状态码: {response.status_code}")
-            return response.text
+    def _headers(self) -> dict:
+        return {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/94.0.4606.81 Safari/537.36",
+            "Referer": "https://www.bilibili.com/",
+            "Content-Type": "application/json;charset=UTF-8",
+        }

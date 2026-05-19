@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer"/>
+    <title>API 接口文档</title>
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a2e;
+            --bg-hover: #252540;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8888aa;
+            --accent: #6c5ce7;
+            --accent-light: #a29bfe;
+            --border: #2a2a40;
+            --success: #00b894;
+            --error: #e17055;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+        .layout {
+            display: flex;
+            height: 100vh;
+        }
+        /* 左侧列表 */
+        .sidebar {
+            width: 280px;
+            min-width: 280px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .sidebar-header h1 {
+            font-size: 18px;
+            color: var(--accent-light);
+            margin-bottom: 8px;
+        }
+        .sidebar-header a {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 13px;
+        }
+        .sidebar-header a:hover { color: var(--accent-light); }
+        .search-box {
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border);
+        }
+        .search-box input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 13px;
+            outline: none;
+        }
+        .search-box input:focus { border-color: var(--accent); }
+        .api-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px 0;
+        }
+        .category-label {
+            padding: 8px 20px 4px;
+            font-size: 11px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+        .api-item {
+            padding: 8px 20px;
+            cursor: pointer;
+            transition: background 0.15s;
+            border-left: 3px solid transparent;
+        }
+        .api-item:hover { background: var(--bg-hover); }
+        .api-item.active {
+            background: var(--bg-hover);
+            border-left-color: var(--accent);
+        }
+        .api-item .name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+        }
+        .api-item .source {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        /* 右侧内容 */
+        .content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 40px;
+        }
+        .api-detail {
+            max-width: 900px;
+        }
+        .api-title {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+        .api-desc {
+            color: var(--text-secondary);
+            margin-bottom: 24px;
+            font-size: 15px;
+        }
+        .section {
+            margin-bottom: 28px;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: var(--accent-light);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .endpoint-box {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 16px;
+            background: var(--bg-card);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 14px;
+        }
+        .method-badge {
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 700;
+            background: var(--success);
+            color: #000;
+        }
+        .endpoint-url { color: var(--text-primary); word-break: break-all; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-card);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th, td {
+            padding: 10px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+        th {
+            background: var(--bg-hover);
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        td { color: var(--text-primary); }
+        td code {
+            background: var(--bg-primary);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+            color: var(--accent-light);
+        }
+        .response-box {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .response-header {
+            padding: 10px 16px;
+            background: var(--bg-hover);
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+        }
+        .response-body {
+            padding: 16px;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            color: var(--text-primary);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        /* 在线测试 */
+        .test-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+        }
+        .test-input-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .test-input-row input {
+            flex: 1;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 14px;
+            outline: none;
+        }
+        .test-input-row input:focus { border-color: var(--accent); }
+        .test-btn {
+            padding: 10px 24px;
+            border: none;
+            border-radius: 6px;
+            background: var(--accent);
+            color: #fff;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        .test-btn:hover { background: #5a4bd6; }
+        .test-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .test-result {
+            margin-top: 12px;
+        }
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .result-status {
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .result-status.success { background: rgba(0,184,148,0.15); color: var(--success); }
+        .result-status.error { background: rgba(225,112,85,0.15); color: var(--error); }
+        .result-time { font-size: 12px; color: var(--text-secondary); }
+        .result-body {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 14px;
+            font-family: 'Fira Code', 'Consolas', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+        }
+        .empty-state .icon { font-size: 48px; margin-bottom: 16px; opacity: 0.3; }
+        .empty-state p { font-size: 15px; }
+        /* 滚动条 */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <!-- 左侧列表 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>API 接口文档</h1>
+                <a href="/">&#8592; 返回首页</a>
+            </div>
+            <div class="search-box">
+                <input type="text" id="searchInput" placeholder="搜索接口..." oninput="filterApis()">
+            </div>
+            <div class="api-list" id="apiList">
+                <!-- JS 动态渲染 -->
+            </div>
+        </div>
+        <!-- 右侧内容 -->
+        <div class="content" id="content">
+            <div class="empty-state">
+                <div class="icon">&#128196;</div>
+                <p>从左侧选择一个接口查看文档</p>
+            </div>
+        </div>
+    </div>
+
+<script>
+let allApis = [];
+let currentApi = null;
+
+// 加载接口列表
+async function loadApis() {
+    try {
+        const resp = await fetch('/api/list');
+        const json = await resp.json();
+        allApis = json.data || [];
+        renderApiList();
+    } catch (e) {
+        document.getElementById('apiList').innerHTML = '<div style="padding:20px;color:var(--error)">加载失败</div>';
+    }
+}
+
+function renderApiList(filter = '') {
+    const list = document.getElementById('apiList');
+    const grouped = {};
+    allApis.forEach(api => {
+        if (filter && !api.name.toLowerCase().includes(filter) && !api.source.toLowerCase().includes(filter) && !api.description.toLowerCase().includes(filter)) return;
+        const cat = api.category || '其他';
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push(api);
+    });
+    let html = '';
+    for (const [cat, apis] of Object.entries(grouped)) {
+        html += `<div class="category-label">${cat}</div>`;
+        apis.forEach(api => {
+            const active = currentApi && currentApi.source === api.source ? ' active' : '';
+            html += `<div class="api-item${active}" onclick="selectApi('${api.source}')">
+                <div class="name">${api.description || api.source}</div>
+                <div class="source">/api/${api.source}/parse</div>
+            </div>`;
+        });
+    }
+    list.innerHTML = html || '<div style="padding:20px;color:var(--text-secondary)">无匹配接口</div>';
+}
+
+function filterApis() {
+    const val = document.getElementById('searchInput').value.toLowerCase();
+    renderApiList(val);
+}
+
+async function selectApi(source) {
+    currentApi = allApis.find(a => a.source === source);
+    if (!currentApi) return;
+    renderApiList(document.getElementById('searchInput').value.toLowerCase());
+    renderDetail(currentApi);
+}
+
+function renderDetail(api) {
+    const content = document.getElementById('content');
+    const endpoint = `/api/${api.source}/parse`;
+    content.innerHTML = `
+        <div class="api-detail">
+            <h2 class="api-title">${api.description || api.source}</h2>
+            <p class="api-desc">来源标识: <code>${api.source}</code> &nbsp; 分类: ${api.category}</p>
+
+            <div class="section">
+                <div class="section-title">&#128279; 接口地址</div>
+                <div class="endpoint-box">
+                    <span class="method-badge">GET</span>
+                    <span class="endpoint-url">${endpoint}</span>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">&#128209; 请求参数</div>
+                <table>
+                    <thead><tr><th>参数名</th><th>类型</th><th>必填</th><th>说明</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>url</code></td><td>string</td><td>是</td><td>分享链接</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="section">
+                <div class="section-title">&#128230; 返回参数</div>
+                <table>
+                    <thead><tr><th>字段</th><th>类型</th><th>说明</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>code</code></td><td>int</td><td>状态码 (200=成功, 400=参数错误, 500=解析失败)</td></tr>
+                        <tr><td><code>msg</code></td><td>string</td><td>提示信息</td></tr>
+                        <tr><td><code>data</code></td><td>object</td><td>解析结果</td></tr>
+                        <tr><td><code>data.video_url</code></td><td>string</td><td>视频直链</td></tr>
+                        <tr><td><code>data.cover_url</code></td><td>string</td><td>封面图</td></tr>
+                        <tr><td><code>data.title</code></td><td>string</td><td>标题</td></tr>
+                        <tr><td><code>data.music_url</code></td><td>string</td><td>音乐链接</td></tr>
+                        <tr><td><code>data.images</code></td><td>array</td><td>图集列表</td></tr>
+                        <tr><td><code>data.author</code></td><td>object</td><td>作者信息</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="section">
+                <div class="section-title">&#128196; 返回示例</div>
+                <div class="response-box">
+                    <div class="response-header">JSON Response</div>
+                    <div class="response-body">{
+  "code": 200,
+  "msg": "解析成功",
+  "data": {
+    "video_url": "https://...",
+    "cover_url": "https://...",
+    "title": "视频标题",
+    "music_url": "https://...",
+    "images": [],
+    "author": {
+      "uid": "",
+      "name": "作者名",
+      "avatar": "https://..."
+    }
+  }
+}</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">&#9889; 在线测试</div>
+                <div class="test-panel">
+                    <div class="test-input-row">
+                        <input type="text" id="testUrl" placeholder="输入分享链接..." />
+                        <button class="test-btn" onclick="testApi('${api.source}')">发送请求</button>
+                    </div>
+                    <div id="testResult"></div>
+                </div>
+            </div>
+
+            <div class="section">
+                <div class="section-title">&#128187; 代码示例</div>
+                <div class="response-box">
+                    <div class="response-header">cURL</div>
+                    <div class="response-body">curl "${endpoint}?url=分享链接"</div>
+                </div>
+                <div class="response-box" style="margin-top:8px">
+                    <div class="response-header">Python</div>
+                    <div class="response-body">import requests
+resp = requests.get("${endpoint}", params={"url": "分享链接"})
+print(resp.json())</div>
+                </div>
+                <div class="response-box" style="margin-top:8px">
+                    <div class="response-header">JavaScript</div>
+                    <div class="response-body">const resp = await fetch("${endpoint}?url=" + encodeURIComponent(url));
+const data = await resp.json();
+console.log(data);</div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+async function testApi(source) {
+    const urlInput = document.getElementById('testUrl');
+    const resultDiv = document.getElementById('testResult');
+    const url = urlInput.value.trim();
+    if (!url) {
+        resultDiv.innerHTML = '<div style="color:var(--error);font-size:13px">请输入分享链接</div>';
+        return;
+    }
+    resultDiv.innerHTML = '<div style="color:var(--text-secondary);font-size:13px">请求中...</div>';
+    const startTime = Date.now();
+    try {
+        const resp = await fetch(`/api/${source}/parse?url=${encodeURIComponent(url)}`);
+        const elapsed = Date.now() - startTime;
+        const data = await resp.json();
+        const isSuccess = data.code === 200;
+        resultDiv.innerHTML = `
+            <div class="test-result">
+                <div class="result-header">
+                    <span class="result-status ${isSuccess ? 'success' : 'error'}">${data.code} ${isSuccess ? '成功' : '失败'}</span>
+                    <span class="result-time">${elapsed}ms</span>
+                </div>
+                <div class="result-body">${syntaxHighlight(JSON.stringify(data, null, 2))}</div>
+            </div>
+        `;
+    } catch (e) {
+        const elapsed = Date.now() - startTime;
+        resultDiv.innerHTML = `
+            <div class="test-result">
+                <div class="result-header">
+                    <span class="result-status error">请求失败</span>
+                    <span class="result-time">${elapsed}ms</span>
+                </div>
+                <div class="result-body">${e.message}</div>
+            </div>
+        `;
+    }
+}
+
+function syntaxHighlight(json) {
+    return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function(match) {
+        let cls = 'color: #e17055';
+        if (/^"/.test(match)) {
+            if (/:$/.test(match)) {
+                cls = 'color: #a29bfe';
+            } else {
+                cls = 'color: #00b894';
+            }
+        } else if (/true|false/.test(match)) {
+            cls = 'color: #fdcb6e';
+        } else if (/null/.test(match)) {
+            cls = 'color: #636e72';
+        }
+        return '<span style="' + cls + '">' + match + '</span>';
+    });
+}
+
+// 初始化
+loadApis();
+</script>
+</body>
+</html>

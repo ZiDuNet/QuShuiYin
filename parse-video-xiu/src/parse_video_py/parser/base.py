@@ -44,8 +44,19 @@ class VideoSource(Enum):
     Doubao = "doubao"  # 豆包
     Instagram = "instagram"  # Instagram
     YouTube = "youtube"  # YouTube
-    DouyinZY = "douyinzy"  # 抖音主页
+
     NetEase = "netease"  # 网易云音乐
+    DyLive = "dylive"  # 抖音实况/图集
+    KsImg = "ksimg"  # 快手图集
+    XhsImg = "xhsimg"  # 小红书图文
+    WeiBoV = "weibov"  # 微博去水印
+    DbDuiHua = "dbduihua"  # 豆包对话图片
+    QianWenImg = "qianwenimg"  # 千问图片/视频
+    VideoSjx = "videosjx"  # 影视解析
+    XyDetail = "xydetail"  # 闲鱼商品信息
+    KuWo = "kuwo"  # 酷我音乐
+    QQMusic = "qqmusic"  # QQ音乐
+    QsMusic = "qsmusic"  # 汽水音乐
 
 
 @dataclasses.dataclass

@@ -1,74 +1,139 @@
+"""皮皮虾解析器 — 基于 short_videos/ppxia.php 移植
+
+核心逻辑：
+1. 跟踪重定向获取真实 URL
+2. 从 URL 中提取 item ID
+3. 调用 https://h5.pipix.com/bds/cell/cell_h5_comment/ API
+4. 解析视频/图集数据
+"""
+
+import re
+from urllib.parse import urlparse
+
 import httpx
 
 from .base import BaseParser, ImgInfo, VideoAuthor, VideoInfo
 
 
 class PiPiXia(BaseParser):
-    """
-    皮皮虾
-    """
 
     async def parse_share_url(self, share_url: str) -> VideoInfo:
-        async with httpx.AsyncClient(follow_redirects=False) as client:
-            response = await client.get(share_url, headers=self.get_default_headers())
-        location_url = response.headers.get("location", "")
-        if len(location_url) <= 0:
-            raise Exception("failed to get location url from share url")
+        try:
+            # 重定向获取真实 URL
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+                resp = await client.get(share_url, headers=self._headers())
+                real_url = str(resp.url)
 
-        video_id = location_url.split("?")[0].split("/")[-1]
+            # 提取 ID
+            m = re.search(r"/item/([^?/&]+)", real_url)
+            if not m:
+                raise Exception("无法从皮皮虾链接中提取视频 ID")
+            item_id = m.group(1)
 
-        return await self.parse_video_id(video_id)
+            # 调用 API
+            api_url = f"https://h5.pipix.com/bds/cell/cell_h5_comment/?count=5&aid=1319&app_name=super&cell_id={item_id}"
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(api_url, headers=self._headers())
+                resp.raise_for_status()
+                data = resp.json()
+
+            comments = data.get("data", {}).get("cell_comments", [])
+            if len(comments) < 2:
+                raise Exception("皮皮虾数据解析失败")
+
+            item = comments[1].get("comment_info", {}).get("item", {})
+            if not item:
+                raise Exception("皮皮虾数据解析失败")
+
+            # 作者
+            author_data = item.get("author", {})
+            author_name = author_data.get("name", "")
+            author_avatar = ""
+            avatar_list = author_data.get("avatar", {}).get("download_list", [])
+            if avatar_list:
+                author_avatar = avatar_list[0].get("url", "")
+
+            # 标题
+            title = item.get("content", "")
+
+            # 封面
+            cover_list = item.get("cover", {}).get("url_list", [])
+            cover_url = cover_list[0].get("url", "") if cover_list else ""
+
+            # 视频
+            video_url = ""
+            video_high = item.get("video", {}).get("video_high", {})
+            url_list = video_high.get("url_list", [])
+            if url_list:
+                video_url = url_list[0].get("url", "")
+
+            # 图集
+            images = []
+            note = item.get("note", {})
+            multi_image = note.get("multi_image", [])
+            for img in multi_image:
+                img_urls = img.get("url_list", [])
+                if img_urls:
+                    images.append(ImgInfo(url=img_urls[0].get("url", "")))
+
+            return VideoInfo(
+                video_url=video_url,
+                cover_url=cover_url,
+                title=title,
+                images=images,
+                author=VideoAuthor(name=author_name, avatar=author_avatar),
+            )
+        except Exception:
+            return await self._fallback_parse(share_url)
 
     async def parse_video_id(self, video_id: str) -> VideoInfo:
-        req_url = (
-            "https://api.pipix.com/bds/cell/cell_comment/"
-            + f"?offset=0&cell_type=1&api_version=1&cell_id={video_id}"
-            + "&ac=wifi&channel=huawei_1319_64&aid=1319&app_name=super"
-        )
-        async with httpx.AsyncClient(follow_redirects=False) as client:
-            response = await client.get(req_url, headers=self.get_default_headers())
-            response.raise_for_status()
+        raise NotImplementedError("皮皮虾暂不支持直接解析视频ID")
 
-        json_data = response.json()
-        if json_data["status_code"] != 0:
-            raise Exception(f"获取作品信息失败:prompt={json_data['prompt']}")
-        data = json_data["data"]["cell_comments"][0]["comment_info"]["item"]
+    async def _fallback_parse(self, share_url: str) -> VideoInfo:
+        """降级: 调用 bugpk 第三方 API"""
+        api_url = f"https://api.bugpk.com/api/pipixia?url={share_url}"
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(api_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            })
+            resp.raise_for_status()
+            data = resp.json()
 
-        author_id = data["author"]["id"]
+        d = data.get("data") or data
+        if isinstance(d, str):
+            raise Exception("第三方解析返回异常")
 
-        # 获取图集图片地址
+        video_url = d.get("url") or d.get("video_url") or d.get("nwm_video_url") or d.get("wm_video_url") or ""
+        cover_url = d.get("cover") or d.get("cover_url") or d.get("img") or d.get("pic") or ""
+        title = d.get("title") or d.get("desc") or d.get("name") or ""
+        music_url = d.get("music_url") or d.get("audio_url") or ""
+
+        if isinstance(d.get("music"), dict):
+            music_url = d["music"].get("url", "") or music_url
+
+        author = d.get("author") or {}
+        if isinstance(author, str):
+            author = {"nickname": author}
+        author_name = author.get("nickname") or author.get("name") or ""
+        author_avatar = author.get("avatar") or author.get("avatar_url") or ""
+
         images = []
-        # 如果data含有 images，并且 images 是一个列表
-        if data.get("note") is not None:
-            for img in data["note"]["multi_image"]:
-                images.append(ImgInfo(url=img["url_list"][0]["url"]))
+        for img in d.get("images") or d.get("image_list") or []:
+            if isinstance(img, str):
+                images.append(ImgInfo(url=img))
+            elif isinstance(img, dict):
+                images.append(ImgInfo(url=img.get("url") or img.get("origin") or ""))
 
-        video_url = ""
-        if data.get("video") is not None:
-            video_url = data["video"]["video_high"]["url_list"][0][
-                "url"
-            ]  # 备用视频地址, 可能有水印
-            # comments中可能带有不带水印视频, 但是comments可能为空
-            for comment in data.get("comments", []):
-                if (
-                    comment["item"]["author"]["id"] == author_id
-                    and comment["item"]["video"]["video_high"]["url_list"][0]["url"]
-                ):
-                    video_url = comment["item"]["video"]["video_high"]["url_list"][0][
-                        "url"
-                    ]
-                    break
-
-        video_info = VideoInfo(
+        return VideoInfo(
             video_url=video_url,
-            cover_url=data["cover"]["url_list"][0]["url"],
-            title=data["content"],
+            cover_url=cover_url,
+            title=title,
+            music_url=music_url,
             images=images,
-            author=VideoAuthor(
-                uid=str(author_id),
-                name=data["author"]["name"],
-                avatar=data["author"]["avatar"]["download_list"][0]["url"],
-            ),
+            author=VideoAuthor(name=author_name, avatar=author_avatar),
         )
 
-        return video_info
+    def _headers(self) -> dict:
+        return {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        }

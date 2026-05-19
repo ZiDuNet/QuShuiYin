@@ -1,129 +1,159 @@
+"""今日头条解析器 — 基于 short_videos/toutiao.php 移植
+
+核心逻辑：
+1. 跟踪重定向获取视频 ID
+2. 请求 https://www.toutiao.com/video/{id} 页面
+3. 提取 RENDER_DATA JSON（URL 解码后解析）
+4. 从中提取视频播放地址
+"""
+
 import json
 import re
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import unquote
 
 import httpx
 
-from .base import BaseParser, VideoAuthor, VideoInfo
+from .base import BaseParser, ImgInfo, VideoAuthor, VideoInfo
 
 
 class Toutiao(BaseParser):
+
     async def parse_share_url(self, share_url: str) -> VideoInfo:
-        video_id = await self._get_video_id(share_url)
-        return await self.parse_video_id(video_id)
+        try:
+            return await self._parse_main(share_url)
+        except Exception:
+            return await self._fallback_parse(share_url)
 
-    async def parse_video_id(self, video_id: str) -> VideoInfo:
-        page_url = f"https://www.toutiao.com/video/{video_id}/"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        }
+    async def _parse_main(self, share_url: str) -> VideoInfo:
+        # 跟踪重定向获取视频 ID
+        video_id = await self._extract_id(share_url)
+        if not video_id:
+            raise Exception("无法从今日头条链接中提取视频 ID")
 
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(page_url, headers=headers)
-            html = response.text
+        page_url = f"https://www.toutiao.com/video/{video_id}"
+        headers = self._headers()
+
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+            resp = await client.get(page_url, headers=headers)
+            resp.raise_for_status()
+            html = resp.text
 
         # 提取 RENDER_DATA
-        match = re.search(
-            r'<script id="RENDER_DATA" type="application/json">(.+?)</script>', html
-        )
-        if not match:
-            raise ValueError("今日头条页面解析失败，未找到RENDER_DATA")
+        start_tag = '<script id="RENDER_DATA" type="application/json">'
+        pos = html.find(start_tag)
+        if pos == -1:
+            raise Exception("今日头条页面中未找到 RENDER_DATA")
 
-        render_data = json.loads(match.group(1))
+        json_str = html[pos + len(start_tag):]
+        end_pos = json_str.find("</script>")
+        if end_pos == -1:
+            raise Exception("今日头条 RENDER_DATA 解析失败")
 
-        # 遍历找到视频数据
-        video_data = None
-        for key, value in render_data.items():
-            if isinstance(value, dict) and "initialVideo" in str(value):
-                video_data = self._find_video_data(value)
-                if video_data:
-                    break
+        json_str = unquote(json_str[:end_pos])
+        try:
+            render_data = json.loads(json_str)
+        except json.JSONDecodeError:
+            raise Exception("今日头条 RENDER_DATA JSON 解析失败")
 
-        if not video_data:
-            raise ValueError("今日头条解析失败，未找到视频数据")
+        data = render_data.get("data", {})
+        if not data or not data.get("itemId"):
+            raise Exception("今日头条分享链接已失效")
 
-        # 视频URL
+        # 提取视频信息
+        initial_video = data.get("initialVideo", {})
+        user_info = initial_video.get("itemCell", {}).get("userInfo", {})
+
+        title = initial_video.get("title", "")
+        cover = initial_video.get("coverUrl", "")
+
+        # 视频地址: 优先索引2（最高画质），其次索引1
+        video_list = initial_video.get("videoPlayInfo", {}).get("video_list", [])
         video_url = ""
-        play_info = video_data.get("videoPlayInfo", {})
-        if isinstance(play_info, str):
-            play_info = json.loads(play_info)
-        video_list = play_info.get("video_list", [])
-        if video_list:
-            # 优先选择最后一个（通常最高清）
-            video_url = video_list[-1].get("main_url", "")
-            if video_url:
-                import base64
+        if len(video_list) > 2:
+            video_url = video_list[2].get("main_url", "")
+        if not video_url and len(video_list) > 1:
+            video_url = video_list[1].get("main_url", "")
+        if not video_url and video_list:
+            video_url = video_list[0].get("main_url", "")
 
-                video_url = base64.b64decode(video_url).decode("utf-8")
-
-        # 标题
-        title = video_data.get("title", "")
-
-        # 封面
-        cover_url = video_data.get("coverUrl", "") or video_data.get(
-            "poster_url", ""
+        return VideoInfo(
+            video_url=video_url,
+            cover_url=cover,
+            title=title,
+            author=VideoAuthor(
+                uid=user_info.get("userID", ""),
+                name=user_info.get("name", ""),
+                avatar=user_info.get("avatarURL", ""),
+            ),
         )
 
-        # 作者
-        author_data = {}
-        item_cell = video_data.get("itemCell", {})
-        if "userInfo" in item_cell:
-            author_data = item_cell["userInfo"]
+    async def parse_video_id(self, video_id: str) -> VideoInfo:
+        url = f"https://www.toutiao.com/video/{video_id}"
+        return await self.parse_share_url(url)
 
-        # 音乐
-        music_url = ""
-        video_ability = item_cell.get("videoAbility", {})
-        if isinstance(video_ability, dict) and video_ability.get("music"):
-            music_url = video_ability["music"]
+    async def _fallback_parse(self, share_url: str) -> VideoInfo:
+        """降级: 调用 bugpk 第三方 API"""
+        api_url = f"https://api.bugpk.com/api/toutiao?url={share_url}"
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(api_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            })
+            resp.raise_for_status()
+            data = resp.json()
+
+        d = data.get("data") or data
+        if isinstance(d, str):
+            raise Exception("第三方解析返回异常")
+
+        video_url = d.get("url") or d.get("video_url") or d.get("nwm_video_url") or d.get("wm_video_url") or ""
+        cover_url = d.get("cover") or d.get("cover_url") or d.get("img") or d.get("pic") or ""
+        title = d.get("title") or d.get("desc") or d.get("name") or ""
+        music_url = d.get("music_url") or d.get("audio_url") or ""
+
+        if isinstance(d.get("music"), dict):
+            music_url = d["music"].get("url", "") or music_url
+
+        author = d.get("author") or {}
+        if isinstance(author, str):
+            author = {"nickname": author}
+        author_name = author.get("nickname") or author.get("name") or ""
+        author_avatar = author.get("avatar") or author.get("avatar_url") or ""
+
+        images = []
+        for img in d.get("images") or d.get("image_list") or []:
+            if isinstance(img, str):
+                images.append(ImgInfo(url=img))
+            elif isinstance(img, dict):
+                images.append(ImgInfo(url=img.get("url") or img.get("origin") or ""))
 
         return VideoInfo(
             video_url=video_url,
             cover_url=cover_url,
             title=title,
             music_url=music_url,
-            author=VideoAuthor(
-                uid=author_data.get("userID", ""),
-                name=author_data.get("name", ""),
-                avatar=author_data.get("avatarURL", ""),
-            ),
+            images=images,
+            author=VideoAuthor(name=author_name, avatar=author_avatar),
         )
 
-    def _find_video_data(self, data: dict) -> dict:
-        """递归查找包含 initialVideo 的数据"""
-        if isinstance(data, dict):
-            if "initialVideo" in data:
-                return data["initialVideo"]
-            for value in data.values():
-                result = self._find_video_data(value)
-                if result:
-                    return result
-        elif isinstance(data, list):
-            for item in data:
-                result = self._find_video_data(item)
-                if result:
-                    return result
-        return None
+    async def _extract_id(self, url: str) -> str:
+        """跟踪重定向并提取视频 ID"""
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+                resp = await client.get(url, headers=self._headers())
+                final_url = str(resp.url)
+                m = re.search(r"/video/(\d+)", final_url)
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
 
-    async def _get_video_id(self, share_url: str) -> str:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15",
+        # 备用: 直接从 URL 中匹配
+        m = re.search(r"(\d{15,})", url)
+        return m.group(1) if m else ""
+
+    def _headers(self) -> dict:
+        return {
+            "User-Agent": "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
         }
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            response = await client.get(share_url, headers=headers)
-            final_url = str(response.url)
-
-        # 从URL中提取ID
-        match = re.search(r"/video/(\d+)", final_url)
-        if match:
-            return match.group(1)
-
-        match = re.search(r"/item/(\d+)", final_url)
-        if match:
-            return match.group(1)
-
-        parsed = urlparse(final_url)
-        params = parse_qs(parsed.query)
-        if "item_id" in params:
-            return params["item_id"][0]
-
-        raise ValueError("从今日头条分享链接中提取视频ID失败")

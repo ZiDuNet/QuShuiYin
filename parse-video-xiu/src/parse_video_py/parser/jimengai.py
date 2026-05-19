@@ -2,13 +2,16 @@ import json
 
 import httpx
 
-from .base import BaseParser, VideoAuthor, VideoInfo
+from .base import BaseParser, ImgInfo, VideoAuthor, VideoInfo
 
 
 class JimengAI(BaseParser):
     async def parse_share_url(self, share_url: str) -> VideoInfo:
-        item_id = self._extract_item_id(share_url)
-        return await self.parse_video_id(item_id)
+        try:
+            item_id = self._extract_item_id(share_url)
+            return await self.parse_video_id(item_id)
+        except Exception:
+            return await self._fallback_parse(share_url)
 
     async def parse_video_id(self, video_id: str) -> VideoInfo:
         api_url = "https://jimeng.jianying.com/mweb/v1/get_item_info"
@@ -73,3 +76,47 @@ class JimengAI(BaseParser):
             return match.group(1)
 
         raise ValueError("从即梦AI分享链接中提取ID失败")
+
+    async def _fallback_parse(self, share_url: str) -> VideoInfo:
+        """降级: 调用 bugpk 第三方 API"""
+        api_url = f"https://api.bugpk.com/api/jimengai?url={share_url}"
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+            resp = await client.get(api_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            })
+            resp.raise_for_status()
+            data = resp.json()
+
+        d = data.get("data") or data
+        if isinstance(d, str):
+            raise Exception("第三方解析返回异常")
+
+        video_url = d.get("url") or d.get("video_url") or d.get("nwm_video_url") or d.get("wm_video_url") or ""
+        cover_url = d.get("cover") or d.get("cover_url") or d.get("img") or d.get("pic") or ""
+        title = d.get("title") or d.get("desc") or d.get("name") or ""
+        music_url = d.get("music_url") or d.get("audio_url") or ""
+
+        if isinstance(d.get("music"), dict):
+            music_url = d["music"].get("url", "") or music_url
+
+        author = d.get("author") or {}
+        if isinstance(author, str):
+            author = {"nickname": author}
+        author_name = author.get("nickname") or author.get("name") or ""
+        author_avatar = author.get("avatar") or author.get("avatar_url") or ""
+
+        images = []
+        for img in d.get("images") or d.get("image_list") or []:
+            if isinstance(img, str):
+                images.append(ImgInfo(url=img))
+            elif isinstance(img, dict):
+                images.append(ImgInfo(url=img.get("url") or img.get("origin") or ""))
+
+        return VideoInfo(
+            video_url=video_url,
+            cover_url=cover_url,
+            title=title,
+            music_url=music_url,
+            images=images,
+            author=VideoAuthor(name=author_name, avatar=author_avatar),
+        )
